@@ -24,7 +24,7 @@ void generateTestFile(int size, const string& filename) {
 }
 
 int main() {
-    int sizes[] = {100, 1000, 10000, 100000, 1000000};
+    int sizes[] = {100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000};
     
     for (int size : sizes) {
         string filename = "d:\\kindoflife\\study\\Parallel-Algorithm-Analysis-and-Design\\LAB 1\\input_" 

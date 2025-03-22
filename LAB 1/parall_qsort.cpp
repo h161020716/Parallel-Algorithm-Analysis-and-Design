@@ -1,170 +1,130 @@
 #include <iostream>
-#include <fstream>
-#include <vector>
-#include <chrono>
 #include <pthread.h>
-#include <queue>
-#include <mutex>
+#include <vector>
+#include <fstream>
+#include <climits>
+#include <cfloat> 
+#include <chrono>
+#include <windows.h>
+#include <algorithm>
+#include <thread>
+
 using namespace std;
+using namespace chrono;
 
-const int NUM_THREADS = 15;  // 线程数量
-const int THRESHOLD = 10000; // 并行阈值
+vector<double> vec, sortedVec;
+pthread_barrier_t barrier;
+const int THREADS_NUM = 2;
+const int CPU_CORES = 2;
 
-struct SortTask {
-    vector<int>* arr;
-    int low;
-    int high;
-    SortTask(vector<int>* a, int l, int h) : arr(a), low(l), high(h) {}
-};
-
-queue<SortTask> taskQueue;
-mutex queueMutex;
-pthread_t threads[NUM_THREADS];
-bool shouldTerminate = false;
-
-int partition(vector<int>& arr, int low, int high) {
-    int pivot = arr[high];
-    int i = low - 1;
+class Section {
+    public:
+        int left;
+        int right;
+        Section() = default;
+    };
     
-    for (int j = low; j < high; j++) {
-        if (arr[j] <= pivot) {
+void quickSort(int left, int right) {
+    if (left >= right) return;
+    double pivot = vec[right];
+    int i = left - 1;
+    for (int j = left; j < right; j++) {
+        if (vec[j] <= pivot) {
             i++;
-            swap(arr[i], arr[j]);
+            swap(vec[i], vec[j]);
         }
     }
-    swap(arr[i + 1], arr[high]);
-    return i + 1;
+    swap(vec[i + 1], vec[right]);
+    quickSort(left, i);
+    quickSort(i + 2, right);
 }
 
-void serialQuickSort(vector<int>& arr, int low, int high) {
-    if (low < high) {
-        int pi = partition(arr, low, high);
-        serialQuickSort(arr, low, pi - 1);
-        serialQuickSort(arr, pi + 1, high);
-    }
-}
-
-void addTask(SortTask task) {
-    lock_guard<mutex> lock(queueMutex);
-    taskQueue.push(task);
-}
-
-void* workerThread(void* arg) {
-    while (true) {
-        SortTask task(nullptr, 0, 0);
-        {
-            lock_guard<mutex> lock(queueMutex);
-            if (shouldTerminate && taskQueue.empty()) {
-                break;
-            }
-            if (!taskQueue.empty()) {
-                task = taskQueue.front();
-                taskQueue.pop();
-            } else {
-                continue;
-            }
-        }
-
-        if (task.high - task.low <= THRESHOLD) {
-            serialQuickSort(*task.arr, task.low, task.high);
-        } else {
-            int pi = partition(*task.arr, task.low, task.high);
-            if (pi - 1 > task.low) {
-                addTask(SortTask(task.arr, task.low, pi - 1));
-            }
-            if (task.high > pi + 1) {
-                addTask(SortTask(task.arr, pi + 1, task.high));
-            }
-        }
-    }
+void* pthread_sort(void* arg) {
+    Section* section = (Section*)arg;
+    quickSort(section->left, section->right);
+    delete section;
+    pthread_barrier_wait(&barrier);
     return nullptr;
 }
 
-void parallelQuickSort(vector<int>& arr) {
-    shouldTerminate = false;
+void merge(int current_size) {
+    vector<int> index(THREADS_NUM), index_most(THREADS_NUM);
+    long sortNumPerThread = current_size / THREADS_NUM;
     
-    // 创建工作线程
-    for (int i = 0; i < NUM_THREADS; i++) {
-        pthread_create(&threads[i], nullptr, workerThread, nullptr);
+    for (int i = 0; i < THREADS_NUM; ++i) {
+        index[i] = i * sortNumPerThread;
+        index_most[i] = (i == THREADS_NUM - 1) ? current_size : (i + 1) * sortNumPerThread;
     }
     
-    // 添加初始任务
-    addTask(SortTask(&arr, 0, arr.size() - 1));
-    
-    // 等待所有任务完成
-    shouldTerminate = true;
-    for (int i = 0; i < NUM_THREADS; i++) {
-        pthread_join(threads[i], nullptr);
+    for (int i = 0; i < current_size; ++i) {
+        double min_num = DBL_MAX;
+        int min_index = 0;
+        for (int j = 0; j < THREADS_NUM; ++j) {
+            if (index[j] < index_most[j] && vec[index[j]] < min_num) {
+                min_num = vec[index[j]];
+                min_index = j;
+            }
+        }
+        sortedVec[i] = min_num;
+        index[min_index]++;
     }
 }
 
 int main() {
-    // 定义测试文件大小数组
-    int sizes[] = {100, 1000, 10000, 100000, 1000000};
-    
-    // 创建性能记录文件
-    string performanceFileName = "d:\\kindoflife\\study\\Parallel-Algorithm-Analysis-and-Design\\LAB 1\\parallel_performance_"
-                               + to_string(NUM_THREADS) + "threads.txt";
-    ofstream performanceFile(performanceFileName);
-    if (!performanceFile) {
-        cout << "无法创建性能记录文件！" << endl;
-        return 1;
+    SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
+    DWORD_PTR mask = 0;
+    for (int i = 0; i < CPU_CORES; i++) {
+        mask |= (1 << i);
     }
-    
-    // 记录线程信息
-    performanceFile << "使用线程数: " << NUM_THREADS << endl;
-    performanceFile << "并行阈值: " << THRESHOLD << endl << endl;
-    
-    // 对每个测试文件进行排序
+    SetProcessAffinityMask(GetCurrentProcess(), mask);
+
+    int sizes[] = {100, 1000, 10000, 100000, 1000000, 10000000, 100000000};
+    ofstream perfFile("d:\\kindoflife\\study\\Parallel-Algorithm-Analysis-and-Design\\LAB 1\\parallel_performance_" 
+        + to_string(THREADS_NUM) + "threads_" + to_string(CPU_CORES) + "cores.txt");
+        perfFile << "使用线程数: " << THREADS_NUM << "\n"
+        << "使用CPU核心数: " << CPU_CORES << "\n"
+        << "并行阈值: 10000\n\n";
+
     for (int size : sizes) {
-        vector<int> arr;
         string inputFile = "d:\\kindoflife\\study\\Parallel-Algorithm-Analysis-and-Design\\LAB 1\\test\\input_" 
                           + to_string(size) + ".txt";
-        string outputFile = "d:\\kindoflife\\study\\Parallel-Algorithm-Analysis-and-Design\\LAB 1\\test\\parallel_" 
-                           + to_string(NUM_THREADS) + "threads_output_" + to_string(size) + ".txt";
-        
-        // 读取输入文件
         ifstream inFile(inputFile);
-        if (!inFile) {
-            cout << "无法打开文件：" << inputFile << endl;
-            continue;
-        }
         
-        int num;
+        vec.clear();
+        double num;
         while (inFile >> num) {
-            arr.push_back(num);
+            vec.push_back(num);
         }
         inFile.close();
         
-        cout << "正在处理规模为 " << size << " 的数据..." << endl;
+        int current_size = vec.size();
+        sortedVec.resize(current_size);
+        long sortNumPerThread = current_size / THREADS_NUM;
+
+        pthread_t tid[THREADS_NUM];
+        pthread_barrier_init(&barrier, NULL, THREADS_NUM + 1);
         
-        // 排序并计时
-        auto start = chrono::high_resolution_clock::now();
-        parallelQuickSort(arr);
-        auto end = chrono::high_resolution_clock::now();
-        chrono::duration<double> duration = end - start;
-        
-        // 记录性能数据
-        performanceFile << "数据规模: " << size << ", 耗时: " << duration.count() << " 秒" << endl;
-        
-        // 保存排序结果
-        ofstream outFile(outputFile);
-        if (outFile) {
-            for (int num : arr) {
-                outFile << num << " ";
-            }
-            outFile.close();
+        auto start = system_clock::now();
+        for (int i = 0; i < THREADS_NUM; ++i) {
+            Section* section = new Section();
+            section->left = i * sortNumPerThread;
+            section->right = (i == THREADS_NUM - 1) ? current_size - 1 : (i + 1) * sortNumPerThread - 1;
+            pthread_create(&tid[i], NULL, pthread_sort, section);
         }
+
+        pthread_barrier_wait(&barrier);
+        merge(current_size);
         
-        cout << "规模 " << size << " 完成，用时: " << duration.count() << " 秒" << endl;
-        
-        // 清空任务队列
-        while (!taskQueue.empty()) {
-            taskQueue.pop();
+        auto end = system_clock::now();
+        auto duration = duration_cast<microseconds>(end - start);
+        perfFile << "数据规模: " << size << ", 耗时: " 
+                << duration.count() * 1e-6 << " 秒" << endl;
+
+        for (int i = 0; i < THREADS_NUM; ++i) {
+            pthread_join(tid[i], NULL);
         }
+        pthread_barrier_destroy(&barrier);
     }
-    
-    performanceFile.close();
-    cout << "所有测试完成，性能数据已保存到 " << performanceFileName << endl;
+    perfFile.close();
     return 0;
 }
