@@ -14,8 +14,8 @@ using namespace chrono;
 
 vector<double> vec, sortedVec;
 pthread_barrier_t barrier;
-const int THREADS_NUM = 2;
-const int CPU_CORES = 2;
+const int THREADS_NUM = 24;
+const int CPU_CORES = 24;
 
 class Section {
     public:
